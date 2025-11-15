@@ -13,7 +13,7 @@ pipe = QwenImagePipeline.from_pretrained(
     ],
     processor_config=ModelConfig(model_id="Qwen/Qwen-Image-Edit", origin_file_pattern="processor/"),
 )
-pipe.enable_vram_management()
+# pipe.enable_vram_management()
 
 # image_1 = pipe(prompt="一位少女", seed=0, num_inference_steps=40, height=1328, width=1024) # 43GB, 03:08
 # image_1.save("image1.jpg")
