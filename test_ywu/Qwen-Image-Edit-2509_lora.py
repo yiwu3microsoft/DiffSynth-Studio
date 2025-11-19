@@ -64,4 +64,4 @@ for idx, fname in enumerate(fname_list):
     }
 
     output_image = pipe(**inputs)
-    output_image.save()
+    output_image.save(fname_save)
