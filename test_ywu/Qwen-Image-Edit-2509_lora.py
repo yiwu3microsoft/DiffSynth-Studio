@@ -17,7 +17,7 @@ pipe = QwenImagePipeline.from_pretrained(
 
 pipe.load_lora(pipe.dit, "/tmp/output/6fb1b1d1-4842-484f-8c08-b09a3199d1f8_3c53764c/models/train/Qwen-Image-Edit-2509_bc_10k_lora/epoch-0.safetensors")
 
-with open("test_ywu/edit_img_prompt.txt", "r") as f:
+with open("test_ywu/edit_img_prompt.tsv", "r") as f:
     lines = f.readlines()
 
 for img_prompt in lines:
