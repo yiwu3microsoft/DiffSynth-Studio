@@ -633,7 +633,8 @@ def launch_training_task(
                 print("Note: Optimizer and scheduler states not found. Starting with fresh optimizer state.")
     
     for epoch_id in range(start_epoch, num_epochs):
-        print(f"Starting epoch {epoch_id}")
+        if accelerator.is_main_process:
+            print(f"Starting epoch {epoch_id}")
         for data in tqdm(dataloader):
             with accelerator.accumulate(model):
                 optimizer.zero_grad()
