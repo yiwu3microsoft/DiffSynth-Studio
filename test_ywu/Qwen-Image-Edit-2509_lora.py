@@ -3,6 +3,18 @@ from PIL import Image
 import torch
 from diffusers.utils import load_image
 import os
+import csv
+
+def read_tsv_to_dict(fname_csv):
+    data_dict = {}
+    with open(fname_csv, 'r', encoding='utf-8') as file:
+        tsv_reader = csv.reader(file, delimiter='\t')
+        header = next(tsv_reader)  # Read header row
+        for row in tsv_reader:
+            if row:  # Skip empty rows
+                key = row[0]  # Use first column as key
+                data_dict[key] = dict(zip(header[1:], row[1:]))  # Map remaining columns
+    return data_dict
 
 pipe = QwenImagePipeline.from_pretrained(
     torch_dtype=torch.bfloat16,
@@ -17,15 +29,19 @@ pipe = QwenImagePipeline.from_pretrained(
 
 pipe.load_lora(pipe.dit, "/tmp/output/6fb1b1d1-4842-484f-8c08-b09a3199d1f8_3c53764c/models/train/Qwen-Image-Edit-2509_bc_10k_lora/epoch-0.safetensors")
 
-with open("test_ywu/edit_img_prompt.tsv", "r") as f:
-    lines = f.readlines()
+fname_csv = "data/validation_rewritten_prompt_map_real_240.csv"
+data_dict = read_tsv_to_dict(fname_csv)
 
-for img_prompt in lines:
-    img_prompt = img_prompt.strip()
-    if not img_prompt:
+data_root = "data/map_real_240_simpleBG"
+fname_list = os.listdir(data_root)
+
+for fname in fname_list:
+    name = fname.split(".")[0]
+    if name not in data_dict:
         continue
-    img_name, prompt = img_prompt.split("\t")
-    image1 = Image.open(os.path.join('data', img_name)).convert("RGB")
+    prompt = data_dict[name]['RewrittenPrompt']
+
+    image1 = Image.open(os.path.join(data_root, fname)).convert("RGB")
 
     inputs = {
         "edit_image": [image1],
@@ -40,4 +56,4 @@ for img_prompt in lines:
     }
 
     output_image = pipe(**inputs)
-    output_image.save(f"./results/{img_name}")
+    output_image.save(f"./results/{name}.jpg")
