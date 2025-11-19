@@ -478,36 +478,64 @@ class DiffusionTrainingModule(torch.nn.Module):
 
 
 class ModelLogger:
-    def __init__(self, output_path, remove_prefix_in_ckpt=None, state_dict_converter=lambda x:x):
+    def __init__(self, output_path, remove_prefix_in_ckpt=None, state_dict_converter=lambda x:x, save_optimizer_state=True):
         self.output_path = output_path
         self.remove_prefix_in_ckpt = remove_prefix_in_ckpt
         self.state_dict_converter = state_dict_converter
+        self.save_optimizer_state = save_optimizer_state
         self.num_steps = 0
 
 
     def on_step_end(self, accelerator, model, save_steps=None):
         self.num_steps += 1
         if save_steps is not None and self.num_steps % save_steps == 0:
-            self.save_model(accelerator, model, f"step-{self.num_steps}.safetensors")
+            if self.save_optimizer_state:
+                self.save_full_state(accelerator, model, f"step-{self.num_steps}")
+            else:
+                self.save_model(accelerator, model, f"step-{self.num_steps}.safetensors")
 
 
     def on_epoch_end(self, accelerator, model, epoch_id):
-        accelerator.wait_for_everyone()
-        if accelerator.is_main_process:
-            state_dict = accelerator.get_state_dict(model)
-            state_dict = accelerator.unwrap_model(model).export_trainable_state_dict(state_dict, remove_prefix=self.remove_prefix_in_ckpt)
-            state_dict = self.state_dict_converter(state_dict)
-            os.makedirs(self.output_path, exist_ok=True)
-            path = os.path.join(self.output_path, f"epoch-{epoch_id}.safetensors")
-            accelerator.save(state_dict, path, safe_serialization=True)
+        if self.save_optimizer_state:
+            self.save_full_state(accelerator, model, f"epoch-{epoch_id}")
+        else:
+            accelerator.wait_for_everyone()
+            if accelerator.is_main_process:
+                state_dict = accelerator.get_state_dict(model)
+                state_dict = accelerator.unwrap_model(model).export_trainable_state_dict(state_dict, remove_prefix=self.remove_prefix_in_ckpt)
+                state_dict = self.state_dict_converter(state_dict)
+                os.makedirs(self.output_path, exist_ok=True)
+                path = os.path.join(self.output_path, f"epoch-{epoch_id}.safetensors")
+                accelerator.save(state_dict, path, safe_serialization=True)
 
 
     def on_training_end(self, accelerator, model, save_steps=None):
         if save_steps is not None and self.num_steps % save_steps != 0:
-            self.save_model(accelerator, model, f"step-{self.num_steps}.safetensors")
+            if self.save_optimizer_state:
+                self.save_full_state(accelerator, model, f"step-{self.num_steps}")
+            else:
+                self.save_model(accelerator, model, f"step-{self.num_steps}.safetensors")
+
+
+    def save_full_state(self, accelerator, model, checkpoint_name):
+        """Save full training state including model, optimizer, scheduler, and RNG states"""
+        accelerator.wait_for_everyone()
+        checkpoint_dir = os.path.join(self.output_path, checkpoint_name)
+        if accelerator.is_main_process:
+            os.makedirs(checkpoint_dir, exist_ok=True)
+        # Save complete training state
+        accelerator.save_state(checkpoint_dir)
+        # Also save model weights separately for easier loading
+        if accelerator.is_main_process:
+            state_dict = accelerator.get_state_dict(model)
+            state_dict = accelerator.unwrap_model(model).export_trainable_state_dict(state_dict, remove_prefix=self.remove_prefix_in_ckpt)
+            state_dict = self.state_dict_converter(state_dict)
+            path = os.path.join(checkpoint_dir, "model.safetensors")
+            accelerator.save(state_dict, path, safe_serialization=True)
 
 
     def save_model(self, accelerator, model, file_name):
+        """Save model weights only"""
         accelerator.wait_for_everyone()
         if accelerator.is_main_process:
             state_dict = accelerator.get_state_dict(model)
@@ -556,30 +584,53 @@ def launch_training_task(
     if resume_from_checkpoint is not None:
         if accelerator.is_main_process:
             print(f"Resuming from checkpoint: {resume_from_checkpoint}")
+        
+        # Check if this is a full checkpoint directory (with optimizer/scheduler states)
+        checkpoint_dir = os.path.dirname(resume_from_checkpoint)
         checkpoint_name = os.path.basename(resume_from_checkpoint)
-        # Extract epoch or step number from checkpoint name
-        if "epoch-" in checkpoint_name:
-            start_epoch = int(checkpoint_name.split("epoch-")[1].split(".")[0]) + 1
-        elif "step-" in checkpoint_name:
-            completed_steps = int(checkpoint_name.split("step-")[1].split(".")[0])
-            model_logger.num_steps = completed_steps
+        
+        # Try to load full training state first (if using accelerate.save_state)
+        if os.path.exists(os.path.join(checkpoint_dir, "optimizer.bin")):
             if accelerator.is_main_process:
-                print(f"Resuming from step {completed_steps}")
-        # Load checkpoint
-        state_dict = load_state_dict(resume_from_checkpoint)
-        # Add prefix if needed
-        if model_logger.remove_prefix_in_ckpt is not None:
-            state_dict_ = {}
-            for name, param in state_dict.items():
-                state_dict_[model_logger.remove_prefix_in_ckpt + name] = param
-            state_dict = state_dict_
-        load_result = accelerator.unwrap_model(model).load_state_dict(state_dict, strict=False)
-        if accelerator.is_main_process:
-            print(f"Checkpoint loaded: {len(state_dict)} keys")
-            if len(load_result[0]) > 0:
-                print(f"Missing keys: {load_result[0]}")
-            if len(load_result[1]) > 0:
-                print(f"Unexpected keys: {load_result[1]}")
+                print(f"Loading full training state from {checkpoint_dir}")
+            accelerator.load_state(checkpoint_dir)
+            # Extract epoch/step from directory or checkpoint name
+            if "epoch-" in checkpoint_dir or "epoch-" in checkpoint_name:
+                epoch_str = checkpoint_dir if "epoch-" in checkpoint_dir else checkpoint_name
+                start_epoch = int(epoch_str.split("epoch-")[1].split(".")[0].split("/")[0]) + 1
+            elif "step-" in checkpoint_dir or "step-" in checkpoint_name:
+                step_str = checkpoint_dir if "step-" in checkpoint_dir else checkpoint_name
+                completed_steps = int(step_str.split("step-")[1].split(".")[0].split("/")[0])
+                model_logger.num_steps = completed_steps
+                if accelerator.is_main_process:
+                    print(f"Resuming from step {completed_steps}")
+        else:
+            # Load model weights only
+            # Extract epoch or step number from checkpoint name
+            if "epoch-" in checkpoint_name:
+                start_epoch = int(checkpoint_name.split("epoch-")[1].split(".")[0]) + 1
+            elif "step-" in checkpoint_name:
+                completed_steps = int(checkpoint_name.split("step-")[1].split(".")[0])
+                model_logger.num_steps = completed_steps
+                if accelerator.is_main_process:
+                    print(f"Resuming from step {completed_steps}")
+            
+            # Load checkpoint
+            state_dict = load_state_dict(resume_from_checkpoint)
+            # Add prefix if needed
+            if model_logger.remove_prefix_in_ckpt is not None:
+                state_dict_ = {}
+                for name, param in state_dict.items():
+                    state_dict_[model_logger.remove_prefix_in_ckpt + name] = param
+                state_dict = state_dict_
+            load_result = accelerator.unwrap_model(model).load_state_dict(state_dict, strict=False)
+            if accelerator.is_main_process:
+                print(f"Model checkpoint loaded: {len(state_dict)} keys")
+                if len(load_result[0]) > 0:
+                    print(f"Missing keys: {load_result[0]}")
+                if len(load_result[1]) > 0:
+                    print(f"Unexpected keys: {load_result[1]}")
+                print("Note: Optimizer and scheduler states not found. Starting with fresh optimizer state.")
     
     for epoch_id in range(start_epoch, num_epochs):
         for data in tqdm(dataloader):
@@ -655,6 +706,7 @@ def wan_parser():
     parser.add_argument("--dataset_num_workers", type=int, default=0, help="Number of workers for data loading.")
     parser.add_argument("--weight_decay", type=float, default=0.01, help="Weight decay.")
     parser.add_argument("--resume_from_checkpoint", type=str, default=None, help="Path to a checkpoint to resume training from.")
+    parser.add_argument("--save_optimizer_state", default=False, action="store_true", help="Whether to save optimizer and scheduler states for full training resumption.")
     return parser
 
 
@@ -689,6 +741,7 @@ def flux_parser():
     parser.add_argument("--dataset_num_workers", type=int, default=0, help="Number of workers for data loading.")
     parser.add_argument("--weight_decay", type=float, default=0.01, help="Weight decay.")
     parser.add_argument("--resume_from_checkpoint", type=str, default=None, help="Path to a checkpoint to resume training from.")
+    parser.add_argument("--save_optimizer_state", default=False, action="store_true", help="Whether to save optimizer and scheduler states for full training resumption.")
     return parser
 
 
@@ -726,4 +779,5 @@ def qwen_image_parser():
     parser.add_argument("--enable_fp8_training", default=False, action="store_true", help="Whether to enable FP8 training. Only available for LoRA training on a single GPU.")
     parser.add_argument("--task", type=str, default="sft", required=False, help="Task type.")
     parser.add_argument("--resume_from_checkpoint", type=str, default=None, help="Path to a checkpoint to resume training from.")
+    parser.add_argument("--save_optimizer_state", default=False, action="store_true", help="Whether to save optimizer and scheduler states for full training resumption.")
     return parser
