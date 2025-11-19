@@ -50,7 +50,7 @@ for idx, fname in enumerate(fname_list):
     prompt = data_dict[name]['RewrittenPrompt']
 
     os.makedirs(args.output_path, exist_ok=True)
-    fname_save = os.path.join(args.output_path, f"{name}.jpg")
+    fname_save = os.path.join(args.output_path, f"{name}_qwen_lora.jpg")
     if os.path.exists(fname_save):
         print(f"Skip existing: {fname_save}")
         continue
