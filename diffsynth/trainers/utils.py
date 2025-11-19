@@ -529,6 +529,7 @@ def launch_training_task(
     num_epochs: int = 1,
     gradient_accumulation_steps: int = 1,
     find_unused_parameters: bool = False,
+    resume_from_checkpoint: str = None,
     args = None,
 ):
     if args is not None:
@@ -539,6 +540,7 @@ def launch_training_task(
         num_epochs = args.num_epochs
         gradient_accumulation_steps = args.gradient_accumulation_steps
         find_unused_parameters = args.find_unused_parameters
+        resume_from_checkpoint = args.resume_from_checkpoint
     
     optimizer = torch.optim.AdamW(model.trainable_modules(), lr=learning_rate, weight_decay=weight_decay)
     scheduler = torch.optim.lr_scheduler.ConstantLR(optimizer)
@@ -549,7 +551,37 @@ def launch_training_task(
     )
     model, optimizer, dataloader, scheduler = accelerator.prepare(model, optimizer, dataloader, scheduler)
     
-    for epoch_id in range(num_epochs):
+    # Resume from checkpoint if provided
+    start_epoch = 0
+    if resume_from_checkpoint is not None:
+        if accelerator.is_main_process:
+            print(f"Resuming from checkpoint: {resume_from_checkpoint}")
+        checkpoint_name = os.path.basename(resume_from_checkpoint)
+        # Extract epoch or step number from checkpoint name
+        if "epoch-" in checkpoint_name:
+            start_epoch = int(checkpoint_name.split("epoch-")[1].split(".")[0]) + 1
+        elif "step-" in checkpoint_name:
+            completed_steps = int(checkpoint_name.split("step-")[1].split(".")[0])
+            model_logger.num_steps = completed_steps
+            if accelerator.is_main_process:
+                print(f"Resuming from step {completed_steps}")
+        # Load checkpoint
+        state_dict = load_state_dict(resume_from_checkpoint)
+        # Add prefix if needed
+        if model_logger.remove_prefix_in_ckpt is not None:
+            state_dict_ = {}
+            for name, param in state_dict.items():
+                state_dict_[model_logger.remove_prefix_in_ckpt + name] = param
+            state_dict = state_dict_
+        load_result = accelerator.unwrap_model(model).load_state_dict(state_dict, strict=False)
+        if accelerator.is_main_process:
+            print(f"Checkpoint loaded: {len(state_dict)} keys")
+            if len(load_result[0]) > 0:
+                print(f"Missing keys: {load_result[0]}")
+            if len(load_result[1]) > 0:
+                print(f"Unexpected keys: {load_result[1]}")
+    
+    for epoch_id in range(start_epoch, num_epochs):
         for data in tqdm(dataloader):
             with accelerator.accumulate(model):
                 optimizer.zero_grad()
@@ -622,6 +654,7 @@ def wan_parser():
     parser.add_argument("--save_steps", type=int, default=None, help="Number of checkpoint saving invervals. If None, checkpoints will be saved every epoch.")
     parser.add_argument("--dataset_num_workers", type=int, default=0, help="Number of workers for data loading.")
     parser.add_argument("--weight_decay", type=float, default=0.01, help="Weight decay.")
+    parser.add_argument("--resume_from_checkpoint", type=str, default=None, help="Path to a checkpoint to resume training from.")
     return parser
 
 
@@ -655,6 +688,7 @@ def flux_parser():
     parser.add_argument("--save_steps", type=int, default=None, help="Number of checkpoint saving invervals. If None, checkpoints will be saved every epoch.")
     parser.add_argument("--dataset_num_workers", type=int, default=0, help="Number of workers for data loading.")
     parser.add_argument("--weight_decay", type=float, default=0.01, help="Weight decay.")
+    parser.add_argument("--resume_from_checkpoint", type=str, default=None, help="Path to a checkpoint to resume training from.")
     return parser
 
 
@@ -691,4 +725,5 @@ def qwen_image_parser():
     parser.add_argument("--processor_path", type=str, default=None, help="Path to the processor. If provided, the processor will be used for image editing.")
     parser.add_argument("--enable_fp8_training", default=False, action="store_true", help="Whether to enable FP8 training. Only available for LoRA training on a single GPU.")
     parser.add_argument("--task", type=str, default="sft", required=False, help="Task type.")
+    parser.add_argument("--resume_from_checkpoint", type=str, default=None, help="Path to a checkpoint to resume training from.")
     return parser
