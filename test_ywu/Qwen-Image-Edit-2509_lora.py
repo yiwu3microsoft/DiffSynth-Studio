@@ -4,6 +4,7 @@ import torch
 from diffusers.utils import load_image
 import os
 import csv
+import argparse
 
 def read_tsv_to_dict(fname_csv):
     data_dict = {}
@@ -15,6 +16,12 @@ def read_tsv_to_dict(fname_csv):
                 key = row[0]  # Use first column as key
                 data_dict[key] = dict(zip(header[1:], row[1:]))  # Map remaining columns
     return data_dict
+
+# Parse command line arguments
+parser = argparse.ArgumentParser(description='Qwen Image Edit with LoRA')
+parser.add_argument('--lora_path', type=str, required=True, help='Path to the LoRA model file')
+parser.add_argument('--output_path', type=str, default='./results', help='Path to save output images')
+args = parser.parse_args()
 
 pipe = QwenImagePipeline.from_pretrained(
     torch_dtype=torch.bfloat16,
@@ -28,7 +35,7 @@ pipe = QwenImagePipeline.from_pretrained(
 )
 pipe.enable_vram_management()
 
-pipe.load_lora(pipe.dit, "/tmp/output/6fb1b1d1-4842-484f-8c08-b09a3199d1f8_3c53764c/models/train/Qwen-Image-Edit-2509_bc_10k_lora/epoch-0.safetensors")
+pipe.load_lora(pipe.dit, args.lora_path)
 
 fname_csv = "data/validation_rewritten_prompt_map_real_240.csv"
 data_dict = read_tsv_to_dict(fname_csv)
@@ -42,7 +49,8 @@ for idx, fname in enumerate(fname_list):
         continue
     prompt = data_dict[name]['RewrittenPrompt']
 
-    fname_save = f"./results/{name}.jpg"
+    os.makedirs(args.output_path, exist_ok=True)
+    fname_save = os.path.join(args.output_path, f"{name}.jpg")
     if os.path.exists(fname_save):
         print(f"Skip existing: {fname_save}")
         continue
