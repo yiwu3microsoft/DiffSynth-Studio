@@ -36,11 +36,18 @@ data_dict = read_tsv_to_dict(fname_csv)
 data_root = "data/map_real_240_simpleBG"
 fname_list = os.listdir(data_root)
 
-for fname in fname_list:
+for idx, fname in enumerate(fname_list):
     name = fname.split(".")[0]
     if name not in data_dict:
         continue
     prompt = data_dict[name]['RewrittenPrompt']
+
+    fname_save = f"./results/{name}.jpg"
+    if os.path.exists(fname_save):
+        print(f"Skip existing: {fname_save}")
+        continue
+    
+    print(f"Processing {idx}/{len(fname_list)}: {fname} with prompt: {prompt}")
 
     image1 = Image.open(os.path.join(data_root, fname)).convert("RGB")
 
@@ -53,8 +60,8 @@ for fname in fname_list:
         "num_inference_steps": 40,
         # "height": 1328,
         # "width": 1024,
-        "edit_image_auto_resize": False
+        "edit_image_auto_resize": True
     }
 
     output_image = pipe(**inputs)
-    output_image.save(f"./results/{name}.jpg")
+    output_image.save()
