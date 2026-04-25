@@ -1,2 +1,7 @@
 __pycache__/
 models/
+results/
+.msc
+.mv
+example_image_dataset/
+.vscode/
